@@ -1,76 +1,155 @@
 from exceptions import ConfigVideoLowViewCount, ConfigVideoMaxLength, YoutubeItemNotFound
-from pytube import YouTube as pytubeYouTube
-from pytube import Playlist as pytubePlaylist
-from youtube_search import YoutubeSearch
-import json
+import os
+import shutil
+from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError
 
-import re
+
+class _YtDlpLogger:
+    """Keep yt-dlp output quiet except for hard errors."""
+
+    def debug(self, _msg):
+        pass
+
+    def info(self, _msg):
+        pass
+
+    def warning(self, _msg):
+        pass
+
+    def error(self, _msg):
+        pass
 
 
 class YouTube:
     def __init__(self):
-        pass
+        self._logger = _YtDlpLogger()
+        self._print_runtime_hints_once()
+
+    def _base_ydl_opts(self):
+        return {
+            'quiet': True,
+            'no_warnings': True,
+            'noprogress': True,
+            'noplaylist': True,
+            'logger': self._logger,
+            'retries': 3,
+            'fragment_retries': 3,
+            'skip_unavailable_fragments': True,
+        }
+
+    def _print_runtime_hints_once(self):
+        missing_ffmpeg = shutil.which('ffmpeg') is None
+        missing_js_runtime = all(
+            shutil.which(runtime) is None
+            for runtime in ('node', 'deno', 'bun')
+        )
+
+        if missing_js_runtime:
+            print(
+                '[i] No JavaScript runtime found (node/deno/bun). '
+                'yt-dlp can still run, but some YouTube formats may be unavailable.'
+            )
+
+        if missing_ffmpeg:
+            print(
+                '[i] ffmpeg not found. Downloads still work, but format selection may be limited.'
+            )
 
     # TODO: Make videos to search configurable via parameter
-    def search(self, search_query, max_length, min_view_count, search_count = 1):
-        youtube_results = YoutubeSearch(search_query, max_results=search_count).to_json()
+    def search(self, search_query, max_length, min_view_count, search_count=10):
+        return self.search_candidates(search_query, max_length, min_view_count, search_count)[0]
 
-        if len(json.loads(youtube_results)['videos']) < 1:
+    def search_candidates(self, search_query, max_length, min_view_count, search_count=10):
+        with YoutubeDL(self._base_ydl_opts()) as ydl:
+            search_result = ydl.extract_info(f"ytsearch{search_count}:{search_query}", download=False)
+
+        entries = search_result.get('entries', []) if search_result else []
+        if len(entries) < 1:
             raise YoutubeItemNotFound('Skipped song -- Could not load from YouTube')
 
-        youtube_videos = json.loads(youtube_results)['videos']
         videos_meta = []
+        for entry in entries:
+            if not entry:
+                continue
 
-        for video in youtube_videos:
-            # print(video)
-            # youtube_video_title = video['title']
-            # TODO: pass in spotify song + artist and find which one matches most
+            duration_seconds = int(entry.get('duration') or 0)
+            view_count = int(entry.get('view_count') or 0)
+            video_link = entry.get('webpage_url')
 
-            # TODO: Check duration against spotify song duration to find closest
+            if video_link:
+                videos_meta.append((video_link, duration_seconds, view_count))
 
-            youtube_video_duration = video['duration'].split(':')
-            youtube_video_duration_seconds = int(youtube_video_duration[0]) * 60  + int(youtube_video_duration[1])
+        if len(videos_meta) < 1:
+            raise YoutubeItemNotFound('Skipped song -- Could not load usable YouTube results')
 
-            youtube_video_views = re.sub('[^0-9]','', video['views'])
-            youtube_video_viewcount_safe = int(youtube_video_views) if str(youtube_video_views).isdigit() else 0
+        valid_videos = [
+            video for video in videos_meta
+            if video[1] < max_length and video[2] > min_view_count
+        ]
 
-            videos_meta.append((video, youtube_video_duration_seconds, youtube_video_viewcount_safe))
+        if len(valid_videos) > 0:
+            # Favor highest-view candidates while keeping several fallbacks.
+            return [video[0] for video in sorted(valid_videos, key=lambda video: video[2], reverse=True)]
 
-        sorted_videos = sorted(videos_meta, key=lambda vid: vid[2], reverse=True) # Find top N videos with the most views
-        chosen_video = sorted_videos[0]
+        highest_view_video = sorted(videos_meta, key=lambda video: video[2], reverse=True)[0]
+        if highest_view_video[1] >= max_length:
+            raise ConfigVideoMaxLength(
+                f'Length {highest_view_video[1]}s exceeds MAX_LENGTH value of {max_length}s [{highest_view_video[0]}]'
+            )
 
-        youtube_video_link = "https://www.youtube.com" + chosen_video[0]['url_suffix']
-
-        if(chosen_video[1] >= max_length):
-            raise ConfigVideoMaxLength(f'Length {chosen_video[1]}s exceeds MAX_LENGTH value of {max_length}s [{youtube_video_link}]')
-
-        if(chosen_video[2] <= min_view_count):
-            raise ConfigVideoLowViewCount(f'View count {chosen_video[2]} does not meet MIN_VIEW_COUNT value of {min_view_count} [{youtube_video_link}]')
-    
-        return youtube_video_link
+        raise ConfigVideoLowViewCount(
+            f'View count {highest_view_video[2]} does not meet MIN_VIEW_COUNT value of {min_view_count} [{highest_view_video[0]}]'
+        )
     
     def download(self, url, audio_bitrate):
-        youtube_video = pytubeYouTube(url)
+        selected_bitrate_kbps = max(48, int(audio_bitrate / 1000))
 
-        if youtube_video.age_restricted:
-            youtube_video.bypass_age_gate()
-        youtube_video_streams = youtube_video.streams.filter(only_audio=True)
+        attempts = [
+            {
+                'format': 'bestaudio*/bestaudio/best',
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+            },
+            {
+                'format': 'bestaudio/best',
+                'extractor_args': {'youtube': {'player_client': ['ios', 'web']}},
+            },
+            {
+                'format': 'best',
+                'extractor_args': {'youtube': {'player_client': ['tv', 'web']}},
+            },
+            {
+                'format': 'best',
+            },
+        ]
 
-        correctIndex = 0
+        last_error = None
+        for attempt in attempts:
+            ydl_opts = self._base_ydl_opts()
+            ydl_opts.update({
+                'format': attempt['format'],
+                'outtmpl': os.path.join('temp', '%(id)s.%(ext)s'),
+            })
 
-        selected_bitrate_normalised = audio_bitrate / 1000
+            if 'extractor_args' in attempt:
+                ydl_opts['extractor_args'] = attempt['extractor_args']
 
-        #select the best audio quality
-        finalKbps = 0
-        correctIndex = 0
-        for i,vid in enumerate(youtube_video_streams):
-            currKbps = int(re.sub("[^0-9]", "", vid.abr))
-            if currKbps <= selected_bitrate_normalised:
-                correctIndex = i
-                finalKbps = currKbps
+            try:
+                with YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    if info.get('entries'):
+                        info = info['entries'][0]
 
-        video_stream = youtube_video_streams[correctIndex]
+                    download_path = info.get('_filename') or ydl.prepare_filename(info)
+                    abr = info.get('abr')
+                    final_kbps = int(float(abr)) if abr else selected_bitrate_kbps
 
-        yt_tmp_out = video_stream.download(output_path="./temp/")
+                return download_path, final_kbps
+            except DownloadError as exc:
+                last_error = exc
+                continue
 
-        return yt_tmp_out, finalKbps
+        if last_error and 'DRM protected' in str(last_error):
+            raise YoutubeItemNotFound('Skipped song -- YouTube result is DRM protected')
+
+        raise last_error if last_error else DownloadError('yt-dlp failed to download this video')

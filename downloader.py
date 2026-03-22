@@ -1,5 +1,4 @@
 from const import colours
-from pytube.exceptions import AgeRestrictedError
 from exceptions import SpotifyAlbumNotFound, SpotifyTrackNotFound, SpotifyPlaylistNotFound, ConfigVideoMaxLength, ConfigVideoLowViewCount, YoutubeItemNotFound
 from apis.spotify import Spotify
 from utils import resave_audio_clip_with_metadata
@@ -134,12 +133,6 @@ class SpotifyDownloader():
 
                 skipped_tracks.append((track, e))
 
-            except AgeRestrictedError as e:
-
-                print(f"   - {colours.FAIL}[!] Skipped a song - Age restricted video.{colours.ENDC} {e}")
-
-                skipped_tracks.append((track, e))
-
             except Exception as e:
                 
                 print(f"   - {colours.FAIL}[!] Skipped a song - Something went wrong.{colours.ENDC} {e}")
@@ -182,11 +175,30 @@ class SpotifyDownloader():
 
             # hardcoded for now max_length, min_view_count
 
-            youtube_link = self.youtube_client.search( searchable_name, self.max_length, self.min_view_count )
+            youtube_candidates = self.youtube_client.search_candidates(
+                searchable_name,
+                self.max_length,
+                self.min_view_count,
+                search_count=15,
+            )
 
             print(f"{colours.ENDC}   - Downloading, please wait{colours.ENDC}")
 
-            video_downloaded_path, self.audio_quality = self.youtube_client.download(youtube_link, self.audio_quality)
+            last_download_error = None
+            video_downloaded_path = None
+            for candidate_idx, youtube_link in enumerate(youtube_candidates[:5]):
+                try:
+                    if candidate_idx > 0:
+                        print(f"{colours.WARNING}   - Retrying with alternative YouTube match [{candidate_idx + 1}/5]{colours.ENDC}")
+                    video_downloaded_path, _source_bitrate_kbps = self.youtube_client.download(youtube_link, self.audio_quality)
+                    break
+                except Exception as e:
+                    last_download_error = e
+
+            if video_downloaded_path is None:
+                if last_download_error:
+                    raise last_download_error
+                raise Exception("Could not download any YouTube candidate for this song")
 
             # consider updating searchable name to something nicer for the end user
 
@@ -229,7 +241,8 @@ class SpotifyDownloader():
         return Path.exists(Path(str(file_path)))
 
     def rm_tmp_folder(self):
-        shutil.rmtree('./temp')
+        if Path('temp').exists():
+            shutil.rmtree('./temp')
 
 if __name__ == "__main__":
     pass

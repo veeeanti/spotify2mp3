@@ -32,33 +32,31 @@ def validate_quality(quality):
         return quality
     try:
         bitrate = int(quality)
-        if 48000 <= bitrate <= 256000:  # Typical YouTube bitrate ranges
+        if 48000 <= bitrate <= 320000:
             return quality
         else:
-            raise argparse.ArgumentTypeError(f"Bitrate outside of typical YouTube range (64 kbps to 320 kbps): {quality}")
+            raise argparse.ArgumentTypeError(f"Bitrate outside supported range (48 kbps to 320 kbps): {quality}")
     except ValueError:
         raise argparse.ArgumentTypeError(f"\nInvalid quality/bitrate: {quality}\n")
 
 def validate_spotify_url(url):
     """Validate the Spotify URL and infer the type."""
-    song_pattern = r"https://open\.spotify\.com/track/[A-Za-z0-9?=\-]+"
-    playlist_pattern = r"https://open\.spotify\.com/playlist/[A-Za-z0-9?=\-]+"
-    private_playlist_pattern = r"https://open\.spotify\.com/playlist/[A-Za-z0-9?=[A-Za-z0-9&pt=[A-Za-z0-9\-]+"
-    album_pattern = r"https://open\.spotify\.com/album/[A-Za-z0-9?=\-]+"
-
     if url == LIKED_KEYWORD:
         return url
-    elif re.match(song_pattern, url):
-        return 'song'
-    elif re.match(private_playlist_pattern, url):
-        return 'private_playlist'
-    elif re.match(playlist_pattern, url):
-        return 'playlist'
-    elif re.match(album_pattern, url):
-        return 'album'
-    else:
+
+    match = re.match(r"^https://open\.spotify\.com/(track|playlist|album)/([A-Za-z0-9]+)(?:\?.*)?$", url)
+    if not match:
         print("")
         raise ValueError(f"Invalid Spotify URL: {url}\n")
+
+    resource_type = match.group(1)
+    if resource_type == 'track':
+        return 'song'
+    if resource_type == 'album':
+        return 'album'
+    if 'pt=' in url:
+        return 'private_playlist'
+    return 'playlist'
 
 def get_user_input():
     """Prompt the user for input when no arguments are supplied."""
@@ -189,7 +187,7 @@ if __name__ == "__main__":
 
         parser.add_argument("-q", "--quality", help="Specify the song download quality or bitrate", type=validate_quality, default="high")
         parser.add_argument("--min-views", help="Minimum view count on YouTube", type=int, default=DEFAULT_MIN_VIEWS_FOR_DOWNLOAD)
-        parser.add_argument("--max-length", help="Maximum video length on YouTube in minutes", type=int, default=DEFAULT_MAX_LENGTH_FOR_DOWNLOAD)
+        parser.add_argument("--max-length", help="Maximum video length on YouTube in seconds", type=int, default=DEFAULT_MAX_LENGTH_FOR_DOWNLOAD)
         parser.add_argument("--disable-threading", help="Disables multiple threads to download songs.", action="store_true")
         parser.add_argument("--login", help=f"Allows downloading user specific content such as {LIKED_KEYWORD} songs or private playlists", action="store_true")
 

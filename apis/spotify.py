@@ -19,7 +19,16 @@ class Spotify:
         if authType == const.SpotifyAuthType.USER:
             token = login.get_user_token()
         elif authType == const.SpotifyAuthType.ANONYMOUS:
-            token = login.get_anon_token()
+            try:
+                token = login.get_anon_token()
+            except Exception:
+                # Spotify frequently blocks anonymous web token scraping. Fall back
+                # to app-only credentials so public resources remain accessible.
+                if not login.is_client_configured():
+                    print(f"\n{const.colours.WARNING}Anonymous mode is unavailable right now. Configure a Spotify app once to continue.{const.colours.ENDC}")
+                    login.do_client_login()
+
+                token = login.get_client_token()
         else:
             token = None
 

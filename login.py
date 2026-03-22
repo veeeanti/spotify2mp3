@@ -9,7 +9,6 @@ from time import sleep
 
 import requests
 import json
-from bs4 import BeautifulSoup
 
 from const import colours
 
@@ -21,7 +20,7 @@ auths = {}  # Auth attempts. Stores data across spotify login
 flask_process = None
 
 cfg_filename = 'tekore_cfg.ini'
-app_host = "localhost"
+app_host = "127.0.0.1"
 app_port = 5000
 app_url = f'http://{app_host}:{app_port}'
 login_redirect_url = f'{app_url}/callback'
@@ -62,17 +61,40 @@ def get_user_token():
 
     return cred.refresh_user_token(refreshToken)
 
+
+def get_client_token():
+    (spotifyClientId, spotifyClientSecret, spotifyReturnUri) = tk.config_from_file(
+        cfg_filename, return_refresh=False
+    )
+
+    if not spotifyClientId or not spotifyClientSecret or not spotifyReturnUri:
+        raise ValueError('Client credentials not available in tekore config file')
+
+    cred = tk.Credentials(spotifyClientId, spotifyClientSecret, spotifyReturnUri)
+    return cred.request_client_token()
+
 # Scrape a "clienttoken" from spotify.com. Short lived, not refreshable token.
 def get_anon_token():
     try:
-        r = requests.request("GET", "https://open.spotify.com/")
-        r_text = (
-            BeautifulSoup(r.content, "html.parser")
-            .find("script", {"id": "session"})
-            .get_text()
+        response = requests.get(
+            "https://open.spotify.com/get_access_token",
+            params={"reason": "transport", "productType": "web_player"},
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "app-platform": "WebPlayer",
+                "Referer": "https://open.spotify.com/",
+                "Origin": "https://open.spotify.com",
+            },
+            timeout=15,
         )
+        response.raise_for_status()
+        payload = response.json()
 
-        return json.loads(r_text)["accessToken"]
+        token = payload.get("accessToken")
+        if not token:
+            raise ValueError("Spotify did not return an anonymous access token")
+
+        return token
     except Exception as e:
         raise ValueError(f'Could not retrieve anonymous token {e}')
 
@@ -93,6 +115,22 @@ def is_client_configured():
 def does_config_exist():
     return os.path.exists(cfg_filename)
 
+
+def validate_redirect_uri_config():
+    if not does_config_exist():
+        return
+
+    try:
+        (_client_id, _client_secret, redirect_uri) = tk.config_from_file(cfg_filename, return_refresh=False)
+    except Exception:
+        return
+
+    if redirect_uri and redirect_uri != login_redirect_url:
+        print(f"{colours.WARNING}[!] Redirect URI mismatch detected.{colours.ENDC}")
+        print(f"{colours.WARNING}Configured: {redirect_uri}{colours.ENDC}")
+        print(f"{colours.WARNING}Expected:   {login_redirect_url}{colours.ENDC}")
+        print(f"{colours.WARNING}Spotify requires an exact URI match including host, port, and path.{colours.ENDC}")
+
 def do_user_login():
     global flask_process
 
@@ -102,6 +140,8 @@ def do_user_login():
         retry = input(f'\n{colours.OKGREEN}Spotify access is partially configured. Would you like to continue? {colours.ENDC}y\\n: ')
         if retry != "y":
             do_client_login()
+
+    validate_redirect_uri_config()
 
     input(f'{permission_prompt}')
 
@@ -171,6 +211,13 @@ def app_factory() -> Flask:
     @app.route('/', methods=['GET'])
     def main():
         (spotifyClientId, spotifyClientSecret, spotifyReturnUri) = tk.config_from_file(cfg_filename, return_refresh=False)
+
+        if spotifyReturnUri and spotifyReturnUri != login_redirect_url:
+            print(f"{colours.WARNING}[!] Adjusting configured redirect URI for this session.{colours.ENDC}")
+            print(f"{colours.WARNING}Configured: {spotifyReturnUri}{colours.ENDC}")
+            print(f"{colours.WARNING}Expected:   {login_redirect_url}{colours.ENDC}")
+            spotifyReturnUri = login_redirect_url
+
         cred = tk.Credentials(spotifyClientId, spotifyClientSecret, spotifyReturnUri)
 
         auth = tk.UserAuth(cred, tk.scope.read)
@@ -189,7 +236,9 @@ def app_factory() -> Flask:
         userToken = auth.request_token(code, state)
 
         # Store refresh token
-        new_conf = (None, None, None, userToken.refresh_token)
+        (existingClientId, existingClientSecret, existingReturnUri, _existingRefreshToken) = tk.config_from_file(cfg_filename, return_refresh=True)
+        redirect_uri_to_store = existingReturnUri if existingReturnUri else login_redirect_url
+        new_conf = (existingClientId, existingClientSecret, redirect_uri_to_store, userToken.refresh_token)
         tk.config_to_file(cfg_filename, new_conf)
 
         return redirect('/complete')

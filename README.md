@@ -1,7 +1,7 @@
 <br>
 <br>
 <br>
-<div align="center"><b>This project is currently inactive, and will not run without big changes to the code.</b></div>
+<div align="center"><b>Project revived for modern Python and current Spotify/YouTube behavior.</b></div>
 <br>
 <br>
 <br>
@@ -59,11 +59,13 @@
 <!-- Prerequisites -->
 ### :bangbang: Prerequisites
 
-1. Ideally use Python 3.8
+1. Use Python 3.11+ (tested on current Python)
 2. Install git.
    - Windows: https://git-scm.com/download/win
    - Ubuntu: It should come pre-installed
    - Mac OS: It should come pre-installed
+3. Recommended: install ffmpeg for best audio extraction compatibility.
+4. Optional but recommended: install Node.js for improved yt-dlp JavaScript extraction support.
 
 <!-- Run Locally -->
 ### :running: Run Locally
@@ -86,6 +88,10 @@ Install packages using pip
 Run the script
 
 `$ python spotify2mp3.py`
+
+CLI usage example:
+
+`$ python spotify2mp3.py --song "https://open.spotify.com/track/<track-id>" --quality high`
 
 Brew yourself a coffee, you deserved it!
 
@@ -110,6 +116,18 @@ On mobile:
 ## Troubleshooting
 
 If you have any issues at all, please post a full log <a href="https://github.com/couldbejake/spotify2mp3/issues">here</a>
+
+### Spotify auth notes
+
+- Public song/album/playlist downloads try anonymous Spotify access first.
+- If Spotify blocks anonymous web tokens in your region/network, the tool now falls back to Spotify app credentials.
+- In that fallback flow, create a Spotify developer app once and enter your Client ID/Secret when prompted.
+
+### YouTube notes
+
+- The project now uses `yt-dlp` for search and download.
+- If you see warnings about missing JS runtime, install Node.js.
+- If you see warnings about ffmpeg, install ffmpeg for best format handling.
 
 Support this project
 

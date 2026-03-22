@@ -1,12 +1,10 @@
-from const import colours, BASE62
+from const import colours
 import logging
 import string
-import sys
 import random
 import eyed3
 from eyed3.id3.frames import ImageFrame
-import moviepy.editor as mp
-from moviepy.editor import *
+from moviepy import AudioFileClip
 import requests
 import shutil
 import os
@@ -40,7 +38,8 @@ def resave_audio_clip_with_metadata(audio_input_path, song_metadata, song_output
     temporary_audio_path = "./temp/" + random_string(20) + ".mp3"
 
     clip = AudioFileClip(audio_input_path)
-    clip.write_audiofile(temporary_audio_path, logger=None, bitrate=f'{audio_quality}k')
+    bitrate_kbps = int(audio_quality / 1000) if int(audio_quality) > 1000 else int(audio_quality)
+    clip.write_audiofile(temporary_audio_path, logger=None, bitrate=f'{bitrate_kbps}k')
 
     audiofile = eyed3.load(temporary_audio_path)
 
